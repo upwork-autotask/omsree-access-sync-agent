@@ -1,0 +1,86 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Add table mapping</h1>
+<form method="post" action="{% url 'add_table_mapping' %}">
+  {% csrf_token %}
+  <div class="card">
+    <label>Direction</label>
+    <select name="direction" id="direction">
+      <option value="web2access">web &rarr; access</option>
+      <option value="access2web">access &rarr; web</option>
+    </select>
+    <div id="a2w_note" class="msg info" style="display:none; margin-top:10px">
+      <strong>Access &rarr; web</strong> is for agreed <strong>Customer / application reference data only</strong>,
+      and only runs if it is signed off in the <em>sync contract</em>. It stays inactive until the
+      access &rarr; web toggle is enabled on the Dashboard.
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Access table <span class="muted">(live from .accdb)</span></label>
+        <select name="access_table" id="access_table"><option value="">— load —</option></select>
+        <p class="muted" id="access_err"></p>
+      </div>
+      <div>
+        <label>PostgreSQL table <span class="muted">(live from CRM)</span></label>
+        <select name="pg_table" id="pg_table"><option value="">— load —</option></select>
+        <p class="muted" id="pg_err"></p>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Key column (Access)</label>
+        <select name="key_column" id="key_column"><option value="">— pick access table first —</option></select>
+      </div>
+      <div>
+        <label>Cursor column (changed-since)</label>
+        <select name="cursor_column" id="cursor_column"><option value="">(none)</option></select>
+      </div>
+      <div style="max-width:200px">
+        <label>Conflict rule</label>
+        <select name="conflict_rule"><option>web-wins</option><option>newest-wins</option></select>
+      </div>
+    </div>
+    <label>Web entity <span class="muted">(label, optional)</span></label>
+    <input type="text" name="web_entity">
+  </div>
+  <button type="submit">Create &amp; add fields</button>
+  <a class="btn secondary" href="{% url 'mappings' %}">Cancel</a>
+</form>
+
+<script>
+const csrftoken = '{{ csrf_token }}';
+async function loadJSON(url){
+  const r = await fetch(url, {headers:{'X-Requested-With':'fetch'}});
+  return r.json();
+}
+function fill(sel, items, keepFirst){
+  if(!keepFirst) sel.innerHTML = '';
+  for(const it of items){ const o=document.createElement('option'); o.value=it; o.textContent=it; sel.appendChild(o); }
+}
+async function loadTables(){
+  for(const [src, selId, errId] of [['access','access_table','access_err'],['postgres','pg_table','pg_err']]){
+    const sel=document.getElementById(selId), err=document.getElementById(errId);
+    sel.innerHTML='<option value="">— loading… —</option>';
+    try{ const d=await loadJSON(`/api/tables/${src}/`); if(d.error){err.textContent=d.error; sel.innerHTML='<option value="">(error)</option>';}
+         else { sel.innerHTML='<option value="">— select —</option>'; fill(sel, d.items, true); err.textContent=''; } }
+    catch(e){ err.textContent='request failed'; }
+  }
+}
+async function loadAccessColumns(){
+  const t=document.getElementById('access_table').value;
+  const key=document.getElementById('key_column'), cur=document.getElementById('cursor_column');
+  if(!t){ return; }
+  const d=await loadJSON(`/api/columns/access/?table=${encodeURIComponent(t)}`);
+  const cols = d.items||[];
+  key.innerHTML='<option value="">— pick —</option>'; fill(key, cols, true);
+  cur.innerHTML='<option value="">(none)</option>'; fill(cur, cols, true);
+}
+document.getElementById('access_table').addEventListener('change', loadAccessColumns);
+const dirSel = document.getElementById('direction');
+function toggleA2W(){ document.getElementById('a2w_note').style.display = dirSel.value === 'access2web' ? 'block' : 'none'; }
+dirSel.addEventListener('change', toggleA2W); toggleA2W();
+loadTables();
+</script>
+{% endblock %}

@@ -6,3 +6,9 @@ last-sync.json
 sync.log
 *.accdb
 *.mdb
+
+# control panel runtime state (db, keys, logs, static)
+controlpanel/instance/
+*.sqlite3
+secret.key
+django_secret.key

@@ -1,0 +1,31 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Email alerts</h1>
+<form method="post" action="{% url 'email_settings' %}">
+  {% csrf_token %}
+  <div class="card">
+    <label><input type="checkbox" name="alerts_enabled" {% if s.alerts_enabled %}checked{% endif %}> Send an email when a sync fails</label>
+    <div class="row">
+      <div><label>SMTP host</label><input type="text" name="smtp_host" value="{{ s.smtp_host }}"></div>
+      <div style="max-width:120px"><label>Port</label><input type="number" name="smtp_port" value="{{ s.smtp_port }}"></div>
+    </div>
+    <div class="row">
+      <div><label>SMTP user</label><input type="text" name="smtp_user" value="{{ s.smtp_user }}"></div>
+      <div><label>SMTP password {% if s.smtp_password_enc %}<span class="muted">(saved)</span>{% endif %}</label>
+        <input type="password" name="smtp_password" placeholder="••••••••" autocomplete="new-password"></div>
+    </div>
+    <label><input type="checkbox" name="smtp_use_tls" {% if s.smtp_use_tls %}checked{% endif %}> Use STARTTLS</label>
+    <div class="row">
+      <div><label>From address</label><input type="email" name="alert_from" value="{{ s.alert_from }}"></div>
+      <div><label>Recipients <span class="muted">(comma-separated)</span></label>
+        <input type="text" name="alert_recipients" value="{{ s.alert_recipients }}"></div>
+    </div>
+  </div>
+  <button type="submit">Save email settings</button>
+</form>
+
+<div class="card" style="margin-top:18px">
+  <form method="post" action="{% url 'test_email' %}">{% csrf_token %}<button class="secondary" type="submit">Send test email</button></form>
+  <p class="muted">Save first — the test uses the saved SMTP values.</p>
+</div>
+{% endblock %}

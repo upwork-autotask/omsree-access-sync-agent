@@ -1,0 +1,29 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Logs</h1>
+
+<div class="card">
+  <h2>Sync runs</h2>
+  <table>
+    <tr><th>Started</th><th>Dir</th><th>Trigger</th><th>Status</th><th>Rows</th><th>Tables</th><th>Detail / error</th></tr>
+    {% for r in runs %}
+    <tr>
+      <td>{{ r.started_at|date:"Y-m-d H:i:s" }}</td>
+      <td>{{ r.direction }}</td>
+      <td>{{ r.trigger }}</td>
+      <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
+      <td>{{ r.rows_written }}</td>
+      <td>{{ r.tables_processed }}</td>
+      <td class="muted">{% if r.error_message %}<span style="color:#991b1b">{{ r.error_message|truncatechars:120 }}</span>{% else %}{{ r.detail|truncatechars:120 }}{% endif %}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" class="muted">No runs yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>sync.log (tail)</h2>
+  <pre>{{ log_tail|default:"(empty)" }}</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Schedule</h1>
+
+<div class="card">
+  <p>Cron runs in-process while this admin app is open.
+     Status: {% if running %}<span class="pill on">running</span>{% else %}<span class="pill off">not started</span>{% endif %}
+     {% if s.scheduler_paused %}<span class="pill off">paused</span>{% endif %}</p>
+  <p>Next fire: <strong>{{ next_run|default:"—" }}</strong></p>
+</div>
+
+<form method="post" action="{% url 'schedule' %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>Frequency</h2>
+    <div class="row">
+      <div style="max-width:220px">
+        <label>Every N minutes</label>
+        <input type="number" name="sync_interval_minutes" min="1" value="{{ s.sync_interval_minutes }}">
+      </div>
+      <div>
+        <label>…or cron expression <span class="muted">(5-field; overrides minutes)</span></label>
+        <input type="text" name="cron_expr" value="{{ s.cron_expr }}" placeholder="*/15 * * * *">
+      </div>
+    </div>
+    <div style="margin-top:14px">
+      <button type="submit" name="action" value="apply">Apply schedule</button>
+      {% if s.scheduler_paused %}
+        <button type="submit" name="action" value="resume" class="ok">Resume</button>
+      {% else %}
+        <button type="submit" name="action" value="pause" class="secondary">Pause</button>
+      {% endif %}
+    </div>
+  </div>
+</form>
+{% endblock %}

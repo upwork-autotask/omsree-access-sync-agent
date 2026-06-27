@@ -1,0 +1,13 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Settings</h1>
+<form method="post" action="{% url 'settings' %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>Behaviour</h2>
+    <label><input type="checkbox" name="dry_run" {% if s.dry_run %}checked{% endif %}> Dry-run by default (read &amp; diff, write nothing)</label>
+    <p class="muted">When on, <code>Sync Now</code> and the scheduler only report what would change. Turn off to enable live writes to Access.</p>
+  </div>
+  <button type="submit">Save settings</button>
+</form>
+{% endblock %}

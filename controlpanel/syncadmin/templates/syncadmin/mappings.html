@@ -1,0 +1,47 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Mappings</h1>
+
+<div class="card">
+  <a class="btn" href="{% url 'add_table_mapping' %}">+ Add table mapping</a>
+  <form method="post" action="{% url 'import_csv' %}" enctype="multipart/form-data" style="display:inline-block; margin-left:8px">
+    {% csrf_token %}
+    <input type="file" name="csv_file" accept=".csv" style="display:inline-block; width:auto">
+    <button class="secondary" type="submit">Upload CSV</button>
+  </form>
+  <a class="btn secondary" href="{% url 'export_csv' %}">Download CSV</a>
+  <form method="post" action="{% url 'reseed_from_docs' %}" style="display:inline">{% csrf_token %}<button class="secondary" type="submit">Re-import docs/*.csv</button></form>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Direction</th><th>Access table</th><th>PG table</th><th>Key</th><th>Fields (active/total)</th><th>Active</th><th></th></tr>
+    {% for tm in tables %}
+    <tr>
+      <td>
+        {% if tm.direction == 'access2web' %}
+          <span class="pill" style="background:#ede9fe;color:#5b21b6">access &rarr; web</span>
+        {% else %}
+          <span class="pill" style="background:#e0f2fe;color:#075985">web &rarr; access</span>
+        {% endif %}
+      </td>
+      <td><a href="{% url 'edit_table_mapping' tm.pk %}">{{ tm.access_table }}</a></td>
+      <td>{{ tm.pg_table|default:"—" }}</td>
+      <td>{{ tm.key_column|default:"—" }}</td>
+      <td>{{ tm.active_fields.count }}/{{ tm.fields.count }}</td>
+      <td><span class="pill {% if tm.is_active %}on{% else %}off{% endif %}">{{ tm.is_active|yesno:"ON,OFF" }}</span></td>
+      <td><a href="{% url 'edit_table_mapping' tm.pk %}">edit</a></td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" class="muted">No mappings yet. Add one or upload a CSV.</td></tr>
+    {% endfor %}
+  </table>
+  <p class="muted" style="margin-top:12px">
+    <strong>Direction:</strong> <span class="pill" style="background:#e0f2fe;color:#075985">web &rarr; access</span>
+    pushes CRM data into Access (default).
+    <span class="pill" style="background:#ede9fe;color:#5b21b6">access &rarr; web</span>
+    sends data the other way &mdash; allowed only for agreed <strong>Customer / application reference data</strong>
+    and only if signed off in the sync contract.
+  </p>
+</div>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Connections</h1>
+
+<form method="post" action="{% url 'connections' %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>MS Access (.accdb)</h2>
+    <label>Database path</label>
+    <input type="text" name="access_db_path" value="{{ s.access_db_path }}" placeholder="C:\OmSree\data\db tables.accdb">
+    <label>Password {% if s.access_db_password_enc %}<span class="muted">(saved — leave blank to keep)</span>{% endif %}</label>
+    <input type="password" name="access_db_password" placeholder="••••••••" autocomplete="new-password">
+  </div>
+
+  <div class="card">
+    <h2>PostgreSQL (OmSree CRM)</h2>
+    <div class="row">
+      <div><label>Host</label><input type="text" name="pg_host" value="{{ s.pg_host }}"></div>
+      <div style="max-width:120px"><label>Port</label><input type="number" name="pg_port" value="{{ s.pg_port }}"></div>
+    </div>
+    <div class="row">
+      <div><label>Database</label><input type="text" name="pg_dbname" value="{{ s.pg_dbname }}"></div>
+      <div><label>User</label><input type="text" name="pg_user" value="{{ s.pg_user }}"></div>
+    </div>
+    <div class="row">
+      <div><label>Password {% if s.pg_password_enc %}<span class="muted">(saved — blank keeps)</span>{% endif %}</label>
+        <input type="password" name="pg_password" placeholder="••••••••" autocomplete="new-password"></div>
+      <div style="max-width:160px"><label>SSL mode</label>
+        <select name="pg_sslmode">
+          <option {% if s.pg_sslmode == 'prefer' %}selected{% endif %}>prefer</option>
+          <option {% if s.pg_sslmode == 'disable' %}selected{% endif %}>disable</option>
+          <option {% if s.pg_sslmode == 'require' %}selected{% endif %}>require</option>
+          <option {% if s.pg_sslmode == 'verify-full' %}selected{% endif %}>verify-full</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>State dir <span class="muted">(SQLite, key, logs — optional)</span></label>
+    <input type="text" name="state_dir" value="{{ s.state_dir }}" placeholder="defaults to the app instance folder">
+  </div>
+
+  <button type="submit">Save connections</button>
+</form>
+
+<div class="card" style="margin-top:18px">
+  <h2>Test</h2>
+  <form method="post" action="{% url 'test_connection' 'access' %}" style="display:inline">{% csrf_token %}<button class="secondary" type="submit">Test Access</button></form>
+  <form method="post" action="{% url 'test_connection' 'postgres' %}" style="display:inline">{% csrf_token %}<button class="secondary" type="submit">Test PostgreSQL</button></form>
+  <p class="muted">Save first, then test — tests use the saved values.</p>
+</div>
+{% endblock %}

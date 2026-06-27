@@ -1,0 +1,105 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>{{ tm.access_table }} <span class="muted">({{ tm.get_direction_display }})</span></h1>
+<p><a href="{% url 'mappings' %}">&larr; all mappings</a></p>
+
+{% if tm.direction == 'access2web' %}
+<div class="msg info">
+  <strong>Access &rarr; web</strong> is restricted to agreed <strong>Customer / application reference data</strong>,
+  and only runs if it is signed off in the <em>sync contract</em>. It stays inactive until the
+  <strong>access &rarr; web</strong> toggle is turned on from the Dashboard.
+</div>
+{% endif %}
+
+<form method="post" action="{% url 'edit_table_mapping' tm.pk %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>Table</h2>
+    <div class="row">
+      <div>
+        <label>Direction</label>
+        <select name="direction">
+          <option value="web2access" {% if tm.direction == 'web2access' %}selected{% endif %}>web &rarr; access</option>
+          <option value="access2web" {% if tm.direction == 'access2web' %}selected{% endif %}>access &rarr; web</option>
+        </select>
+      </div>
+      <div><label>PostgreSQL table</label><input type="text" name="pg_table" value="{{ tm.pg_table }}"></div>
+      <div><label>Key column</label><input type="text" name="key_column" value="{{ tm.key_column }}"></div>
+      <div><label>Cursor column</label><input type="text" name="cursor_column" value="{{ tm.cursor_column }}"></div>
+      <div style="max-width:180px"><label>Conflict</label>
+        <select name="conflict_rule">
+          <option {% if tm.conflict_rule == 'web-wins' %}selected{% endif %}>web-wins</option>
+          <option {% if tm.conflict_rule == 'newest-wins' %}selected{% endif %}>newest-wins</option>
+        </select></div>
+    </div>
+    <label style="margin-top:10px"><input type="checkbox" name="is_active" {% if tm.is_active %}checked{% endif %}> Table active (sync this table)</label>
+    <div style="margin-top:12px"><button type="submit" name="action" value="save_table">Save table</button></div>
+  </div>
+</form>
+
+<form method="post" action="{% url 'edit_table_mapping' tm.pk %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>Fields</h2>
+    <table>
+      <tr><th>Access column</th><th>CRM field (PG)</th><th>Role</th><th>Active</th><th></th></tr>
+      {% for f in tm.fields.all %}
+      <tr>
+        <td>{{ f.access_column }}</td>
+        <td><input type="text" name="crm_field_{{ f.id }}" value="{{ f.crm_field }}"></td>
+        <td>
+          <select name="role_{{ f.id }}">
+            {% for val, lab in roles %}<option value="{{ val }}" {% if f.role == val %}selected{% endif %}>{{ val }}</option>{% endfor %}
+          </select>
+        </td>
+        <td style="text-align:center"><input type="checkbox" name="active_{{ f.id }}" {% if f.is_active %}checked{% endif %}></td>
+        <td><a href="#" onclick="event.preventDefault();document.getElementById('del{{ f.id }}').submit();" style="color:#991b1b">remove</a></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="muted">No fields yet — add some below.</td></tr>
+      {% endfor %}
+    </table>
+    <div style="margin-top:12px"><button type="submit" name="action" value="update_fields">Save field changes</button></div>
+  </div>
+</form>
+
+{% for f in tm.fields.all %}
+<form id="del{{ f.id }}" method="post" action="{% url 'delete_field_mapping' f.pk %}">{% csrf_token %}</form>
+{% endfor %}
+
+<form method="post" action="{% url 'edit_table_mapping' tm.pk %}">
+  {% csrf_token %}
+  <div class="card">
+    <h2>Add field <span class="muted">(columns live from the databases)</span></h2>
+    <div class="row">
+      <div>
+        <label>Access column</label>
+        <select name="access_column" id="access_column"><option value="">— load —</option></select>
+      </div>
+      <div>
+        <label>CRM field (PostgreSQL column)</label>
+        <select name="crm_field" id="crm_field"><option value="">— load —</option></select>
+      </div>
+      <div style="max-width:180px">
+        <label>Role</label>
+        <select name="role">{% for val, lab in roles %}<option value="{{ val }}" {% if val == 'sync' %}selected{% endif %}>{{ val }}</option>{% endfor %}</select>
+      </div>
+    </div>
+    <div style="margin-top:12px"><button type="submit" name="action" value="add_field" class="secondary">Add field</button></div>
+  </div>
+</form>
+
+<form method="post" action="{% url 'delete_table_mapping' tm.pk %}" onsubmit="return confirm('Delete this whole table mapping?');">
+  {% csrf_token %}<button class="danger" type="submit">Delete table mapping</button>
+</form>
+
+<script>
+async function loadJSON(u){ const r=await fetch(u,{headers:{'X-Requested-With':'fetch'}}); return r.json(); }
+function fill(sel, items){ sel.innerHTML='<option value="">— select —</option>'; for(const it of items){const o=document.createElement('option');o.value=it;o.textContent=it;sel.appendChild(o);} }
+(async () => {
+  try { const a = await loadJSON('/api/columns/access/?table={{ tm.access_table|urlencode }}'); if(a.items) fill(document.getElementById('access_column'), a.items); else document.getElementById('access_column').innerHTML='<option value="">(set Access connection)</option>'; } catch(e){}
+  const pgt = "{{ tm.pg_table|default:tm.access_table|escapejs }}";
+  try { const p = await loadJSON('/api/columns/postgres/?table='+encodeURIComponent(pgt)); if(p.items) fill(document.getElementById('crm_field'), p.items); else document.getElementById('crm_field').innerHTML='<option value="">(set PostgreSQL connection)</option>'; } catch(e){}
+})();
+</script>
+{% endblock %}

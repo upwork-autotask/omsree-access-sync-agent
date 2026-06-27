@@ -1,0 +1,49 @@
+{% extends "syncadmin/base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="card">
+  <div class="row">
+    <div>
+      <h2>Run a sync</h2>
+      <form method="post" action="{% url 'sync_now' %}" style="display:inline">
+        {% csrf_token %}
+        <button type="submit">Sync Now</button>
+      </form>
+      <form method="post" action="{% url 'sync_now' %}" style="display:inline">
+        {% csrf_token %}<input type="hidden" name="dry_run" value="1">
+        <button type="submit" class="secondary">Sync Now (dry-run)</button>
+      </form>
+      <p class="muted">Default behaviour: {% if s.dry_run %}dry-run (writes nothing){% else %}live writes{% endif %}.</p>
+    </div>
+    <div>
+      <h2>Direction</h2>
+      <p>
+        web &rarr; access
+        <span class="pill {% if s.web_to_access_enabled %}on{% else %}off{% endif %}">{{ s.web_to_access_enabled|yesno:"ON,OFF" }}</span>
+        <form method="post" action="{% url 'toggle_direction' 'web2access' %}" style="display:inline">{% csrf_token %}<button class="secondary" type="submit">toggle</button></form>
+      </p>
+      <p>
+        access &rarr; web
+        <span class="pill {% if s.access_to_web_enabled %}on{% else %}off{% endif %}">{{ s.access_to_web_enabled|yesno:"ON,OFF" }}</span>
+        <form method="post" action="{% url 'toggle_direction' 'access2web' %}" style="display:inline">{% csrf_token %}<button class="secondary" type="submit">toggle</button></form>
+      </p>
+      <p class="muted">{{ active_w2a }} active web&rarr;access table(s), {{ active_a2w }} access&rarr;web.</p>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Status</h2>
+  <table>
+    <tr><th>Last run</th><td>
+      {% if last %}{{ last.started_at }} &middot; {{ last.direction }} &middot;
+        <span class="pill {{ last.status }}">{{ last.status }}</span>
+        &middot; {{ last.rows_written }} row(s){% else %}never{% endif %}
+    </td></tr>
+    {% if last.error_message %}<tr><th>Last error</th><td style="color:#991b1b">{{ last.error_message }}</td></tr>{% endif %}
+    <tr><th>Next scheduled</th><td>{{ next_run|default:"—" }}{% if s.scheduler_paused %} <span class="pill off">paused</span>{% endif %}</td></tr>
+  </table>
+  <p class="muted" style="margin-top:10px"><a href="{% url 'logs' %}">View full logs &rarr;</a></p>
+</div>
+{% endblock %}
