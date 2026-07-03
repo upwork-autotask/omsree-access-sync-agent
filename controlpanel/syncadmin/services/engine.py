@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+import traceback as _traceback
 
 from django.utils import timezone
 
@@ -26,11 +27,34 @@ class EngineError(Exception):
     pass
 
 
-def _pg_rows_for(settings, tm: TableMapping):
-    """Pull active mapped columns for one table mapping from PostgreSQL.
+def _pg_connect_retry(settings, attempts: int = 3, base_delay: float = 2.0):
+    """Open one PostgreSQL connection, retrying transient failures.
+
+    A single shared connection per run (instead of one per table) means one TCP
+    connect+auth to the remote server rather than nine — far fewer chances for a
+    connection timeout over a slow/internet link.
+    """
+    last = None
+    for i in range(attempts):
+        try:
+            return connections._pg_connect(
+                settings.pg_host, settings.pg_port, settings.pg_dbname,
+                settings.pg_user, settings.pg_password, settings.pg_sslmode,
+                timeout=20,
+            )
+        except Exception as exc:  # transient network / server-busy
+            last = exc
+            logger.warning("PostgreSQL connect attempt %d/%d failed: %s", i + 1, attempts, exc)
+            if i < attempts - 1:
+                time.sleep(base_delay * (i + 1))
+    raise EngineError(f"Could not connect to PostgreSQL after {attempts} attempts: {last}")
+
+
+def _pg_rows_for(conn, tm: TableMapping):
+    """Pull active mapped columns for one table mapping from a shared PG connection.
 
     Returns rows keyed by Access column names (already translated), ready for the
-    diff against Access.
+    diff against Access. The connection is owned by the caller (not closed here).
     """
     fields = list(tm.active_fields)
     if not fields:
@@ -47,24 +71,16 @@ def _pg_rows_for(settings, tm: TableMapping):
         qualified = f'"{source_table}"'
     col_sql = ", ".join(f'"{c}"' for c in crm_cols)
 
-    conn = connections._pg_connect(
-        settings.pg_host, settings.pg_port, settings.pg_dbname,
-        settings.pg_user, settings.pg_password, settings.pg_sslmode,
-    )
-    try:
-        cur = conn.cursor()
-        cur.execute(f"SELECT {col_sql} FROM {qualified}")
-        colnames = [d[0] for d in cur.description]
-        rows = []
-        for raw in cur.fetchall():
-            crm_row = dict(zip(colnames, raw))
-            access_row = {crm_to_access[c]: v for c, v in crm_row.items() if c in crm_to_access}
-            rows.append(access_row)
-        # access column names actually present
-        access_cols = [crm_to_access[c] for c in crm_cols]
-        return rows, access_cols
-    finally:
-        conn.close()
+    cur = conn.cursor()
+    cur.execute(f"SELECT {col_sql} FROM {qualified}")
+    colnames = [d[0] for d in cur.description]
+    rows = []
+    for raw in cur.fetchall():
+        crm_row = dict(zip(colnames, raw))
+        access_row = {crm_to_access[c]: v for c, v in crm_row.items() if c in crm_to_access}
+        rows.append(access_row)
+    access_cols = [crm_to_access[c] for c in crm_cols]
+    return rows, access_cols
 
 
 def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> SyncRun:
@@ -89,52 +105,116 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
         from agent.access_db import PyodbcAccessDatabase
 
         db = PyodbcAccessDatabase(settings.access_db_path, settings.access_db_password)
+        pg_conn = None
         try:
+            # One shared PostgreSQL connection for the whole run (retried up-front).
+            # If PG can't be reached at all, abort before touching Access.
+            pg_conn = _pg_connect_retry(settings)
             mappings = TableMapping.objects.filter(direction="web2access", is_active=True)
             if not mappings:
                 detail_lines.append("No active web->access table mappings.")
+            table_errors: list[str] = []
             for tm in mappings:
-                incoming, access_cols = _pg_rows_for(settings, tm)
-                if not access_cols:
-                    detail_lines.append(f"{tm.access_table}: no active fields, skipped")
-                    continue
-                existing = db.read_rows(tm.access_table, access_cols)
-                diff = compute_diff(tm.access_table, tm.key_column, existing, incoming)
-                tables_processed += 1
-                detail_lines.append(diff.summary())
-                logger.info("diff %s", diff.summary())
+                # Isolate each table: one table's failure must not abort the whole run.
+                try:
+                    incoming, access_cols = _pg_rows_for(pg_conn, tm)
+                    if not access_cols:
+                        detail_lines.append(f"{tm.access_table}: no active fields, skipped")
+                        continue
+                    existing = db.read_rows(tm.access_table, access_cols)
+                    diff = compute_diff(tm.access_table, tm.key_column, existing, incoming)
+                    tables_processed += 1
+                    detail_lines.append(diff.summary())
+                    logger.info("diff %s", diff.summary())
 
-                if dry or not diff.has_changes:
-                    continue
+                    if dry or not diff.has_changes:
+                        continue
 
-                if not backed_up:
-                    path = db.backup()
-                    if path:
-                        detail_lines.append(f"backup: {path}")
-                    backed_up = True
+                    if not backed_up:
+                        path = db.backup()
+                        if path:
+                            detail_lines.append(f"backup: {path}")
+                        backed_up = True
 
-                rows = [c.new_row for c in diff.inserts] + [c.new_row for c in diff.updates]
-                with db.transaction():
-                    written = db.upsert_rows(tm.access_table, tm.key_column, rows)
-                rows_written += written
-                detail_lines.append(f"{tm.access_table}: wrote {written} row(s)")
-                logger.info("wrote %d row(s) to %s", written, tm.access_table)
+                    rows = [c.new_row for c in diff.inserts] + [c.new_row for c in diff.updates]
+                    with db.transaction():
+                        written = db.upsert_rows(tm.access_table, tm.key_column, rows)
+                    rows_written += written
+                    detail_lines.append(f"{tm.access_table}: wrote {written} row(s)")
+                    logger.info("wrote %d row(s) to %s", written, tm.access_table)
+
+                    # After seeding explicit web IDs into an AutoNumber key, bump the
+                    # table's AutoNumber seed past MAX(id) so an office-side insert in
+                    # Access can't later reuse an ID that belongs to a web record.
+                    if diff.inserts:
+                        try:
+                            seed = db.reseed_autonumber(tm.access_table, tm.key_column)
+                            if seed is not None:
+                                detail_lines.append(f"{tm.access_table}: AutoNumber reseeded to {seed}")
+                                logger.info("reseeded %s AutoNumber -> %d", tm.access_table, seed)
+                        except Exception as rexc:
+                            detail_lines.append(f"{tm.access_table}: AutoNumber reseed skipped ({rexc})")
+                            logger.warning("reseed failed on %s: %s", tm.access_table, rexc)
+                except Exception as texc:
+                    msg = f"{tm.access_table}: FAILED - {type(texc).__name__}: {texc}"
+                    table_errors.append(msg)
+                    detail_lines.append(msg)
+                    logger.exception("table %s failed", tm.access_table)
+                    # A dropped/broken PG connection poisons every later table on the
+                    # same connection. Try to re-establish it; if PG is truly down,
+                    # stop rather than logging the same timeout for the rest.
+                    import psycopg2
+                    if isinstance(texc, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+                        try:
+                            pg_conn.close()
+                        except Exception:
+                            pass
+                        try:
+                            pg_conn = _pg_connect_retry(settings)
+                            detail_lines.append("reconnected to PostgreSQL")
+                        except Exception as rexc:
+                            detail_lines.append(f"PostgreSQL unreachable - aborting remaining tables: {rexc}")
+                            break
         finally:
+            if pg_conn is not None:
+                try:
+                    pg_conn.close()
+                except Exception:
+                    pass
             db.close()
 
-        run.status = "dry-run" if dry else "ok"
         run.rows_written = rows_written
         run.tables_processed = tables_processed
         run.detail = "\n".join(detail_lines)
+        if table_errors:
+            # Some tables synced, some failed: surface as error but keep the successes.
+            run.status = "error"
+            run.error_message = (
+                f"{len(table_errors)} of {len(mappings)} table(s) failed; "
+                f"{tables_processed} synced. See detail."
+            )
+            run.traceback = "\n".join(table_errors)
+            mailer.send_alert(
+                settings,
+                "OmSree Sync Agent - sync completed with errors",
+                f"{run.error_message}\n\n" + "\n".join(detail_lines),
+            )
+        else:
+            run.status = "dry-run" if dry else "ok"
     except Exception as exc:
+        tb = _traceback.format_exc()
         run.status = "error"
-        run.error_message = str(exc)
+        run.error_message = f"{type(exc).__name__}: {exc}"
+        run.traceback = tb
         run.detail = "\n".join(detail_lines)
-        logger.error("web->access sync failed: %s", exc)
+        # Full traceback to sync.log (logger.exception attaches it automatically).
+        logger.exception("web->access sync failed: %s", exc)
         mailer.send_alert(
             settings,
             "OmSree Sync Agent — sync FAILED",
-            f"web->access sync failed at {timezone.now()}:\n\n{exc}\n\n" + "\n".join(detail_lines[-30:]),
+            f"web->access sync failed at {timezone.now()}:\n\n{run.error_message}\n\n"
+            + "Progress:\n" + "\n".join(detail_lines[-30:])
+            + "\n\nTraceback:\n" + tb,
         )
     finally:
         run.finished_at = timezone.now()

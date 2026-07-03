@@ -25,6 +25,7 @@ urlpatterns = [
     path("mappings/", views.mappings, name="mappings"),
     path("mappings/add/", views.add_table_mapping, name="add_table_mapping"),
     path("mappings/<int:pk>/", views.edit_table_mapping, name="edit_table_mapping"),
+    path("mappings/<int:pk>/toggle/", views.toggle_table_mapping, name="toggle_table_mapping"),
     path("mappings/<int:pk>/delete/", views.delete_table_mapping, name="delete_table_mapping"),
     path("mappings/field/<int:pk>/delete/", views.delete_field_mapping, name="delete_field_mapping"),
     path("mappings/import-csv/", views.import_csv, name="import_csv"),

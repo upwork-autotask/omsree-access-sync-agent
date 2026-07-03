@@ -1,5 +1,15 @@
 {% extends "syncadmin/base.html" %}
 {% block content %}
+<style>
+  .filterbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .filterbar input, .filterbar select { margin:0; }
+  .filterbar .btn { margin:0; }
+  .pill-btn { border:none; border-radius:999px; padding:3px 12px; font-size:12px; font-weight:600;
+              cursor:pointer; letter-spacing:.02em; }
+  .pill-btn.on  { background:#dcfce7; color:#166534; }
+  .pill-btn.off { background:#fee2e2; color:#991b1b; }
+  .pill-btn:hover { filter:brightness(0.95); box-shadow:0 0 0 2px rgba(0,0,0,.06); }
+</style>
 <h1>Mappings</h1>
 
 <div class="card">
@@ -14,6 +24,25 @@
 </div>
 
 <div class="card">
+  <form method="get" action="{% url 'mappings' %}" class="filterbar">
+    <input type="text" name="q" value="{{ q }}" placeholder="Search table, PG table, entity, key…" style="flex:1; min-width:200px">
+    <select name="direction" style="width:auto">
+      <option value="">All directions</option>
+      <option value="web2access" {% if direction == 'web2access' %}selected{% endif %}>web &rarr; access</option>
+      <option value="access2web" {% if direction == 'access2web' %}selected{% endif %}>access &rarr; web</option>
+    </select>
+    <select name="active" style="width:auto">
+      <option value="">Any status</option>
+      <option value="on" {% if active == 'on' %}selected{% endif %}>Active</option>
+      <option value="off" {% if active == 'off' %}selected{% endif %}>Inactive</option>
+    </select>
+    <button type="submit">Apply filter</button>
+    {% if filtered %}<a class="btn secondary" href="{% url 'mappings' %}">Clear</a>{% endif %}
+  </form>
+  <p class="muted" style="margin-top:10px">
+    Showing <strong>{{ tables|length }}</strong> of {{ total }} table mapping{{ total|pluralize }}{% if filtered %} (filtered){% endif %}.
+  </p>
+
   <table>
     <tr><th>Direction</th><th>Access table</th><th>PG table</th><th>Key</th><th>Fields (active/total)</th><th>Active</th><th></th></tr>
     {% for tm in tables %}
@@ -29,11 +58,24 @@
       <td>{{ tm.pg_table|default:"—" }}</td>
       <td>{{ tm.key_column|default:"—" }}</td>
       <td>{{ tm.active_fields.count }}/{{ tm.fields.count }}</td>
-      <td><span class="pill {% if tm.is_active %}on{% else %}off{% endif %}">{{ tm.is_active|yesno:"ON,OFF" }}</span></td>
+      <td>
+        <form method="post" action="{% url 'toggle_table_mapping' tm.pk %}" style="display:inline; margin:0">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="pill-btn {% if tm.is_active %}on{% else %}off{% endif %}"
+                  title="Click to {% if tm.is_active %}deactivate{% else %}activate{% endif %} {{ tm.access_table }}">
+            {{ tm.is_active|yesno:"ON,OFF" }}
+          </button>
+        </form>
+      </td>
       <td><a href="{% url 'edit_table_mapping' tm.pk %}">edit</a></td>
     </tr>
     {% empty %}
+    {% if filtered %}
+    <tr><td colspan="7" class="muted">No table mappings match your filter. <a href="{% url 'mappings' %}">Clear filter</a>.</td></tr>
+    {% else %}
     <tr><td colspan="7" class="muted">No mappings yet. Add one or upload a CSV.</td></tr>
+    {% endif %}
     {% endfor %}
   </table>
   <p class="muted" style="margin-top:12px">

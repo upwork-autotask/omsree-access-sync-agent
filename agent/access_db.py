@@ -55,6 +55,13 @@ class AccessDatabase(ABC):
     def row_count(self, table: str) -> int:
         raise NotImplementedError
 
+    def reseed_autonumber(self, table: str, key: str) -> int | None:
+        """After inserting explicit IDs into an AutoNumber key, bump the table's
+        AutoNumber seed to MAX(key)+1 so a future Access-side insert can't reuse an
+        ID that already belongs to a web record. No-op if the key isn't AutoNumber.
+        Returns the new seed, or None if nothing was done."""
+        return None
+
     def close(self) -> None:  # pragma: no cover - trivial default
         pass
 
@@ -181,6 +188,45 @@ class PyodbcAccessDatabase(AccessDatabase):
     def row_count(self, table: str) -> int:
         cur = self._conn.cursor()
         return cur.execute(f"SELECT COUNT(*) FROM {self._quote(table)}").fetchone()[0]
+
+    def is_autonumber(self, table: str, column: str) -> bool:
+        """True if the column is an Access AutoNumber (ODBC reports TYPE_NAME 'COUNTER')."""
+        cur = self._conn.cursor()
+        try:
+            for col in cur.columns(table=table):
+                if col.column_name.upper() == column.upper():
+                    return str(col.type_name).upper() == "COUNTER"
+        except Exception:  # pragma: no cover - driver metadata quirk
+            return False
+        return False
+
+    def reseed_autonumber(self, table: str, key: str) -> int | None:
+        if not self.is_autonumber(table, key):
+            return None
+        cur = self._conn.cursor()
+        # Highest ID currently in the table (web-seeded values included).
+        row = cur.execute(
+            f"SELECT MAX({self._quote(key)}) FROM {self._quote(table)}"
+        ).fetchone()
+        current_max = row[0] if row and row[0] is not None else 0
+        seed = int(current_max) + 1
+        # Access cannot run DDL inside an open transaction. Close any pending
+        # transaction, switch to autocommit for the ALTER, then restore.
+        try:
+            self._conn.commit()
+        except Exception:  # pragma: no cover
+            pass
+        prev_autocommit = self._conn.autocommit
+        self._conn.autocommit = True
+        try:
+            # ALTER COLUMN ... COUNTER(seed, incr) resets the next AutoNumber value.
+            self._conn.cursor().execute(
+                f"ALTER TABLE {self._quote(table)} "
+                f"ALTER COLUMN {self._quote(key)} COUNTER({seed}, 1)"
+            )
+        finally:
+            self._conn.autocommit = prev_autocommit
+        return seed
 
     def read_rows(self, table: str, columns: Sequence[str]) -> list[dict[str, Any]]:
         col_sql = ", ".join(self._quote(c) for c in columns)

@@ -1,5 +1,11 @@
 {% extends "syncadmin/base.html" %}
 {% block content %}
+<style>
+  .errbox { background:#0f172a; color:#e2e8f0; padding:10px 12px; border-radius:6px;
+            white-space:pre-wrap; word-break:break-word; max-height:340px; overflow:auto;
+            font-size:12px; line-height:1.45; margin:4px 0 10px; }
+  td details summary { list-style:revert; }
+</style>
 <h1>Logs</h1>
 
 <div class="card">
@@ -14,7 +20,30 @@
       <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
       <td>{{ r.rows_written }}</td>
       <td>{{ r.tables_processed }}</td>
-      <td class="muted">{% if r.error_message %}<span style="color:#991b1b">{{ r.error_message|truncatechars:120 }}</span>{% else %}{{ r.detail|truncatechars:120 }}{% endif %}</td>
+      <td class="muted">
+        {% if r.error_message %}
+          <details>
+            <summary style="color:#991b1b; cursor:pointer">{{ r.error_message|truncatechars:120 }}</summary>
+            <div style="margin-top:8px">
+              <strong>Error</strong>
+              <pre class="errbox">{{ r.error_message }}</pre>
+              {% if r.traceback %}
+              <strong>Traceback</strong>
+              <pre class="errbox">{{ r.traceback }}</pre>
+              {% endif %}
+              {% if r.detail %}
+              <strong>Progress before failure</strong>
+              <pre class="errbox">{{ r.detail }}</pre>
+              {% endif %}
+            </div>
+          </details>
+        {% elif r.detail %}
+          <details>
+            <summary style="cursor:pointer">{{ r.detail|truncatechars:120 }}</summary>
+            <pre class="errbox" style="margin-top:8px">{{ r.detail }}</pre>
+          </details>
+        {% else %}—{% endif %}
+      </td>
     </tr>
     {% empty %}
     <tr><td colspan="7" class="muted">No runs yet.</td></tr>

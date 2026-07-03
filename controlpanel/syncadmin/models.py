@@ -150,6 +150,7 @@ class SyncRun(models.Model):
     rows_written = models.IntegerField(default=0)
     cursor = models.CharField(max_length=120, blank=True)
     error_message = models.TextField(blank=True)
+    traceback = models.TextField(blank=True)
     detail = models.TextField(blank=True)
     duration_ms = models.IntegerField(default=0)
 

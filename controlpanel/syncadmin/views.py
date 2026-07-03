@@ -11,7 +11,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from .models import AgentSettings, FieldMapping, SyncRun, TableMapping
-from .services import connections, engine, mailer, mappings as mapping_svc, scheduler
+from .services import connections as conn_svc, engine, mailer, mappings as mapping_svc, scheduler
 
 
 # --------------------------------------------------------------------------- #
@@ -87,13 +87,13 @@ def connections(request):
 def test_connection(request, which):
     s = AgentSettings.get_solo()
     if which == "access":
-        res = connections.test_access(s.access_db_path, s.access_db_password)
+        res = conn_svc.test_access(s.access_db_path, s.access_db_password)
     elif which == "postgres":
-        res = connections.test_postgres(
+        res = conn_svc.test_postgres(
             s.pg_host, s.pg_port, s.pg_dbname, s.pg_user, s.pg_password, s.pg_sslmode
         )
     else:
-        res = connections.TestResult(False, "Unknown connection.")
+        res = conn_svc.TestResult(False, "Unknown connection.")
     (messages.success if res.ok else messages.error)(request, f"{which.title()}: {res.message}")
     return redirect("connections")
 
@@ -177,9 +177,50 @@ def schedule_view(request):
 # --------------------------------------------------------------------------- #
 @staff_member_required
 def mappings(request):
+    from django.db.models import Q
+
+    q = request.GET.get("q", "").strip()
+    direction = request.GET.get("direction", "").strip()
+    active = request.GET.get("active", "").strip()
+
+    tables = TableMapping.objects.all()
+    if q:
+        tables = tables.filter(
+            Q(access_table__icontains=q)
+            | Q(pg_table__icontains=q)
+            | Q(web_entity__icontains=q)
+            | Q(key_column__icontains=q)
+        )
+    if direction in (TableMapping.WEB2ACCESS, TableMapping.ACCESS2WEB):
+        tables = tables.filter(direction=direction)
+    if active == "on":
+        tables = tables.filter(is_active=True)
+    elif active == "off":
+        tables = tables.filter(is_active=False)
+
     return render(request, "syncadmin/mappings.html", {
-        "tables": TableMapping.objects.all(),
+        "tables": tables,
+        "total": TableMapping.objects.count(),
+        "q": q,
+        "direction": direction,
+        "active": active,
+        "filtered": bool(q or direction or active),
     })
+
+
+@staff_member_required
+@require_POST
+def toggle_table_mapping(request, pk):
+    """Flip a table mapping's active flag from the list page, preserving filters."""
+    tm = get_object_or_404(TableMapping, pk=pk)
+    tm.is_active = not tm.is_active
+    tm.save(update_fields=["is_active"])
+    messages.success(
+        request,
+        f"{tm.access_table} is now {'ACTIVE' if tm.is_active else 'INACTIVE'}.",
+    )
+    nxt = request.POST.get("next")
+    return redirect(nxt) if nxt else redirect("mappings")
 
 
 @staff_member_required
@@ -330,9 +371,9 @@ def api_tables(request, source):
     s = AgentSettings.get_solo()
     try:
         if source == "access":
-            data = connections.access_tables(s.access_db_path, s.access_db_password)
+            data = conn_svc.access_tables(s.access_db_path, s.access_db_password)
         elif source == "postgres":
-            data = connections.pg_tables(s.pg_host, s.pg_port, s.pg_dbname, s.pg_user, s.pg_password, s.pg_sslmode)
+            data = conn_svc.pg_tables(s.pg_host, s.pg_port, s.pg_dbname, s.pg_user, s.pg_password, s.pg_sslmode)
         else:
             return JsonResponse({"error": "unknown source"}, status=400)
         return JsonResponse({"items": data})
@@ -348,9 +389,9 @@ def api_columns(request, source):
         return JsonResponse({"items": []})
     try:
         if source == "access":
-            data = connections.access_columns(s.access_db_path, s.access_db_password, table)
+            data = conn_svc.access_columns(s.access_db_path, s.access_db_password, table)
         elif source == "postgres":
-            data = connections.pg_columns(s.pg_host, s.pg_port, s.pg_dbname, s.pg_user, s.pg_password, table, s.pg_sslmode)
+            data = conn_svc.pg_columns(s.pg_host, s.pg_port, s.pg_dbname, s.pg_user, s.pg_password, table, s.pg_sslmode)
         else:
             return JsonResponse({"error": "unknown source"}, status=400)
         return JsonResponse({"items": data})

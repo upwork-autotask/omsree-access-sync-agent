@@ -71,6 +71,12 @@ def _pg_connect(host, port, dbname, user, password, sslmode="prefer", timeout=8)
         password=password or "",
         sslmode=sslmode or "prefer",
         connect_timeout=timeout,
+        # Keep a long-lived connection alive across a multi-table run over a
+        # remote/internet link, and detect a dropped socket promptly.
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
     )
 
 
