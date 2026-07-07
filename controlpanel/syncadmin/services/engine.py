@@ -50,18 +50,47 @@ def _pg_connect_retry(settings, attempts: int = 3, base_delay: float = 2.0):
     raise EngineError(f"Could not connect to PostgreSQL after {attempts} attempts: {last}")
 
 
+def _parse_const(raw: str):
+    """Parse a `const:` literal into a Python value (int, float, bool, or str)."""
+    raw = raw.strip()
+    if raw == "":
+        return None
+    low = raw.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    try:
+        return int(raw)
+    except ValueError:
+        try:
+            return float(raw)
+        except ValueError:
+            return raw
+
+
 def _pg_rows_for(conn, tm: TableMapping):
     """Pull active mapped columns for one table mapping from a shared PG connection.
 
     Returns rows keyed by Access column names (already translated), ready for the
     diff against Access. The connection is owned by the caller (not closed here).
+
+    A field whose crm_field is ``const:<value>`` is treated as a constant: the
+    literal is injected into every row instead of being SELECTed from the view.
+    This fills Access-required columns that have no CRM source (e.g. a required
+    lookup id that is uniform for all web rows).
     """
     fields = list(tm.active_fields)
     if not fields:
         return [], []
-    # crm_field -> access_column translation map
-    crm_to_access = {f.crm_field: f.access_column for f in fields}
-    crm_cols = list(crm_to_access.keys())
+    # Split real (SELECTed) columns from injected constants.
+    real_fields: dict[str, str] = {}   # crm_field -> access_column
+    const_fields: dict[str, object] = {}  # access_column -> literal value
+    for f in fields:
+        cf = (f.crm_field or "").strip()
+        if cf.lower().startswith("const:"):
+            const_fields[f.access_column] = _parse_const(cf[len("const:"):])
+        else:
+            real_fields[cf] = f.access_column
+    crm_cols = list(real_fields.keys())
 
     source_table = tm.pg_table or tm.access_table
     if "." in source_table:
@@ -69,17 +98,19 @@ def _pg_rows_for(conn, tm: TableMapping):
         qualified = f'"{schema}"."{name}"'
     else:
         qualified = f'"{source_table}"'
-    col_sql = ", ".join(f'"{c}"' for c in crm_cols)
 
-    cur = conn.cursor()
-    cur.execute(f"SELECT {col_sql} FROM {qualified}")
-    colnames = [d[0] for d in cur.description]
     rows = []
-    for raw in cur.fetchall():
-        crm_row = dict(zip(colnames, raw))
-        access_row = {crm_to_access[c]: v for c, v in crm_row.items() if c in crm_to_access}
-        rows.append(access_row)
-    access_cols = [crm_to_access[c] for c in crm_cols]
+    if crm_cols:  # there must be at least the key column to SELECT and diff on
+        col_sql = ", ".join(f'"{c}"' for c in crm_cols)
+        cur = conn.cursor()
+        cur.execute(f"SELECT {col_sql} FROM {qualified}")
+        colnames = [d[0] for d in cur.description]
+        for raw in cur.fetchall():
+            crm_row = dict(zip(colnames, raw))
+            access_row = {real_fields[c]: v for c, v in crm_row.items() if c in real_fields}
+            access_row.update(const_fields)  # stamp the constants onto every row
+            rows.append(access_row)
+    access_cols = list(real_fields.values()) + list(const_fields.keys())
     return rows, access_cols
 
 
@@ -121,6 +152,16 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
                     if not access_cols:
                         detail_lines.append(f"{tm.access_table}: no active fields, skipped")
                         continue
+                    # Safety guard: never upsert a row whose key is null/blank -- it
+                    # cannot be matched against Access and would create a junk row
+                    # with an empty key (e.g. web units not yet assigned a code).
+                    key = tm.key_column
+                    _before = len(incoming)
+                    incoming = [r for r in incoming if str(r.get(key) or "").strip() != ""]
+                    _skipped = _before - len(incoming)
+                    if _skipped:
+                        detail_lines.append(f"{tm.access_table}: skipped {_skipped} row(s) with blank {key}")
+                        logger.warning("skipped %d blank-key row(s) for %s", _skipped, tm.access_table)
                     existing = db.read_rows(tm.access_table, access_cols)
                     diff = compute_diff(tm.access_table, tm.key_column, existing, incoming)
                     tables_processed += 1
