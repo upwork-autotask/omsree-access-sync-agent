@@ -38,20 +38,40 @@ Synced (web-wins): `UNIT_CODE`, `Block`, `Floor_No`, `Flat_No`, `Types`, `SBUA`,
 (all of `OM SREE MADHUBAN` (property 39) and `OM SREE SKY Park` (property 32)).
 They cannot key into Access until codes are assigned.
 
-## #2 — Applications → `tbl_Property_Details` (HELD)
+## #2 — Applications → `tbl_Property_Details` (IMPLEMENTED on working copy)
 
-Access is the system of record for bookings (all history + legal/financial fields:
-loan, agreement, sale deed, registration, TDS, stamp duty, possession). The web is
-newly adopted and has only ~15–37 bookings so far. The ~80 legal columns have **no
-CRM source**.
+Source: `public.tbl_Property_Details` view, filtered to rows that have a booking
+(`customer_id` present). Key `PROPERTY_DETAILS_ID` = unit id (explicit-id insert +
+AutoNumber reseed).
 
-Therefore a web→access applications sync must be **strictly additive**: insert new web
-bookings, fill only CRM-backed columns (customer, booking date, status, cancellation),
-and **never** overwrite Access history. web-wins is unsafe for this table.
+Note: the view's `customer_id` is the **booking-application id**, which is exactly what
+Access `CUSTOMER_ID` expects (Access `tbl_Customer` is one row per booking with up to
+four applicants in columns). It is NOT mislabeled; customers already sync into Access
+and applications reference them cleanly.
 
-Blocked on: (1) the **production** Access DB path (current file is a test copy with an
-empty `tbl_Property_Details`); (2) a **booking-identity rule** so web bookings don't
-duplicate Access records.
+**Sequencing (required):** sync `tbl_Customer` **before** applications so the
+`CUSTOMER_ID` foreign key resolves.
+
+**FK-integrity filter:** only applications whose `CUSTOMER_ID` exists in Access
+`tbl_Customer` are written. Draft bookings with no customer entered (e.g. booking ids
+125, 130) are excluded — they would be FK orphans.
+
+**Mapped (additive):** `PROPERTY_DETAILS_ID`, `CUSTOMER_ID`, `PROPERTY_ID`,
+`BLOCK_NAME`, `FLAT_NO`, `FLOOR_NUMBER`, `FLAT_SIZE`, `FLAT_AMOUNT`, `BOOKING_DATE`,
+`CANCELLATION_REASON`, `CANCELLATION_DATE`, `ISACTIVE`, plus required
+`PROPERTY_STATUS_ID` = `const:1` (BOOKED) and `PROPERTY_TYPE_ID` = `const:1` (BUILDER).
+
+**Never touched (office-managed in Access):** all legal/financial fields — `LOAN_*`,
+`AGREEMENT_*`, `SALE_DEED_*`, `REGISTRATION_*`, `TDS_*`, `STAMP_DUTY_*`, `POSSESSION_*`.
+
+Initial load on the working copy inserted 13 applications (of 15 units with a booking;
+2 excluded as draft/no-customer). The web currently holds cutover **test** bookings;
+real bookings will flow the same way.
+
+**To productionise:** move the `customer_id`-present + FK filter into a CRM view or the
+engine (currently applied in the load), confirm the production Access path, and decide
+whether `PROPERTY_STATUS_ID`/`PROPERTY_TYPE_ID` should be derived per-booking rather
+than constant.
 
 ## Engine capabilities added this pass
 
