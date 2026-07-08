@@ -1,4 +1,34 @@
+import datetime
+from decimal import Decimal
+
 from agent.diff import compute_diff, format_diff
+
+
+def _unchanged(old, new):
+    d = compute_diff("t", "k",
+                     existing_rows=[{"k": "1", "v": old}],
+                     incoming_rows=[{"k": "1", "v": new}])
+    return d.unchanged == 1 and not d.updates
+
+
+def test_numeric_type_and_precision_are_equal():
+    assert _unchanged(6.9, Decimal("6.90"))   # float vs Decimal, trailing zero
+    assert _unchanged(100, 100.0)             # int vs float
+    assert not _unchanged(6.9, 7.0)           # real difference still detected
+
+
+def test_datetime_subsecond_tz_and_date_are_equal():
+    acc = datetime.datetime(2026, 6, 22, 9, 44, 39)
+    web = datetime.datetime(2026, 6, 22, 9, 44, 39, 79000, tzinfo=datetime.timezone.utc)
+    assert _unchanged(acc, web)               # sub-second + tz dropped
+    assert _unchanged(datetime.datetime(2026, 6, 22, 0, 0), datetime.date(2026, 6, 22))
+    assert not _unchanged(datetime.datetime(2026, 6, 22, 9, 44, 39), datetime.date(2026, 6, 22))
+
+
+def test_bool_none_and_empty_string_null_are_equal():
+    assert _unchanged(False, None)            # Access BIT False vs web None
+    assert not _unchanged(True, None)         # True vs None is a real change
+    assert _unchanged(None, "")               # NULL vs empty string
 
 
 def test_insert_when_key_absent():
