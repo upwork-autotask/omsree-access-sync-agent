@@ -37,11 +37,16 @@ def _pg_connect_retry(settings, attempts: int = 3, base_delay: float = 2.0):
     last = None
     for i in range(attempts):
         try:
-            return connections._pg_connect(
+            conn = connections._pg_connect(
                 settings.pg_host, settings.pg_port, settings.pg_dbname,
                 settings.pg_user, settings.pg_password, settings.pg_sslmode,
                 timeout=20,
             )
+            # We only ever SELECT from PostgreSQL. Autocommit means a failed query
+            # on one table does not leave the shared connection in an aborted
+            # transaction that poisons every later table (InFailedSqlTransaction).
+            conn.autocommit = True
+            return conn
         except Exception as exc:  # transient network / server-busy
             last = exc
             logger.warning("PostgreSQL connect attempt %d/%d failed: %s", i + 1, attempts, exc)
@@ -201,6 +206,13 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
                     table_errors.append(msg)
                     detail_lines.append(msg)
                     logger.exception("table %s failed", tm.access_table)
+                    # Clear any aborted transaction so a query error on this table
+                    # cannot cascade into InFailedSqlTransaction on the next table.
+                    if pg_conn is not None:
+                        try:
+                            pg_conn.rollback()
+                        except Exception:
+                            pass
                     # A dropped/broken PG connection poisons every later table on the
                     # same connection. Try to re-establish it; if PG is truly down,
                     # stop rather than logging the same timeout for the rest.
