@@ -6,15 +6,25 @@
   <div class="row">
     <div>
       <h2>Run a sync</h2>
+      <p style="margin:.2rem 0"><strong>web &rarr; access</strong></p>
       <form method="post" action="{% url 'sync_now' %}" style="display:inline">
-        {% csrf_token %}
+        {% csrf_token %}<input type="hidden" name="direction" value="web2access">
         <button type="submit">Sync Now</button>
       </form>
       <form method="post" action="{% url 'sync_now' %}" style="display:inline">
-        {% csrf_token %}<input type="hidden" name="dry_run" value="1">
-        <button type="submit" class="secondary">Sync Now (dry-run)</button>
+        {% csrf_token %}<input type="hidden" name="direction" value="web2access"><input type="hidden" name="dry_run" value="1">
+        <button type="submit" class="secondary">dry-run</button>
       </form>
-      <p class="muted">Default behaviour: {% if s.dry_run %}dry-run (writes nothing){% else %}live writes{% endif %}.</p>
+      <p style="margin:.6rem 0 .2rem"><strong>access &rarr; web</strong> (inbound)</p>
+      <form method="post" action="{% url 'sync_now' %}" style="display:inline">
+        {% csrf_token %}<input type="hidden" name="direction" value="access2web">
+        <button type="submit">Sync Now</button>
+      </form>
+      <form method="post" action="{% url 'sync_now' %}" style="display:inline">
+        {% csrf_token %}<input type="hidden" name="direction" value="access2web"><input type="hidden" name="dry_run" value="1">
+        <button type="submit" class="secondary">dry-run</button>
+      </form>
+      <p class="muted">Default behaviour: {% if s.dry_run %}dry-run (writes nothing){% else %}live writes{% endif %}. Inbound needs CRM write access + the direction toggled ON.</p>
     </div>
     <div>
       <h2>Direction</h2>

@@ -277,9 +277,203 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
     return run
 
 
+# --------------------------------------------------------------------------- #
+# access -> web (inbound)
+# --------------------------------------------------------------------------- #
+def _access_rows_for(db, tm: TableMapping):
+    """Read active mapped columns from the Access table, translated to CRM field
+    names. Returns (rows keyed by crm_field, crm_key_field, crm_cols).
+
+    Only 'real' fields flow (const: fields are outbound-only). Fields whose role
+    keeps them in Access (is_active False) are never read, so KYC/no-leave columns
+    can't travel back to the web.
+    """
+    fields = [f for f in tm.active_fields
+              if not (f.crm_field or "").strip().lower().startswith("const:")]
+    if not fields:
+        return [], None, []
+    access_to_crm = {f.access_column: f.crm_field for f in fields}
+    access_cols = list(access_to_crm.keys())
+    rows = db.read_rows(tm.access_table, access_cols)
+    out = [{access_to_crm[c]: v for c, v in r.items() if c in access_to_crm} for r in rows]
+    crm_key = access_to_crm.get(tm.key_column)
+    crm_cols = list(access_to_crm.values())
+    return out, crm_key, crm_cols
+
+
+def _pg_read_rows(conn, table: str, cols: list[str]):
+    """Read current rows from a CRM table/view (for diffing), keyed by crm_field."""
+    if "." in table:
+        schema, name = table.split(".", 1)
+        qualified = f'"{schema}"."{name}"'
+    else:
+        qualified = f'"{table}"'
+    col_sql = ", ".join(f'"{c}"' for c in cols)
+    cur = conn.cursor()
+    cur.execute(f"SELECT {col_sql} FROM {qualified}")
+    names = [d[0] for d in cur.description]
+    return [dict(zip(names, row)) for row in cur.fetchall()]
+
+
+def _build_upsert_sql(target: str, key: str, cols: list[str]) -> str:
+    """Parameterised INSERT ... ON CONFLICT (key) DO UPDATE for one CRM row."""
+    if "." in target:
+        schema, name = target.split(".", 1)
+        qualified = f'"{schema}"."{name}"'
+    else:
+        qualified = f'"{target}"'
+    collist = ", ".join(f'"{c}"' for c in cols)
+    placeholders = ", ".join(["%s"] * len(cols))
+    updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in cols if c != key)
+    return (f"INSERT INTO {qualified} ({collist}) VALUES ({placeholders}) "
+            f'ON CONFLICT ("{key}") DO UPDATE SET {updates}')
+
+
+def _pg_upsert_rows(conn, target: str, key: str, rows: list[dict]) -> int:
+    """Upsert rows into a CRM table. Caller manages the transaction (commit)."""
+    written = 0
+    cur = conn.cursor()
+    for row in rows:
+        cols = list(row.keys())
+        cur.execute(_build_upsert_sql(target, key, cols), [row[c] for c in cols])
+        written += 1
+    return written
+
+
+def run_access_to_web(trigger: str = "manual", dry_run: bool | None = None) -> SyncRun:
+    """Push agreed Access changes back to the CRM (access -> web).
+
+    Mirrors run_web_to_access with the direction reversed: Access is the source,
+    the CRM table is the target, and Access wins. Writes are transactional per
+    table. Requires WRITE access to the CRM target (base table or an updatable
+    view); until that is granted the live path will simply error per table, which
+    is caught and reported. Defaults to whatever settings.dry_run says.
+    """
+    settings = AgentSettings.get_solo()
+    dry = settings.dry_run if dry_run is None else dry_run
+    run = SyncRun.objects.create(
+        trigger=trigger, direction="access2web",
+        status="dry-run" if dry else "ok",
+    )
+    t0 = time.monotonic()
+    detail_lines: list[str] = []
+    rows_written = 0
+    tables_processed = 0
+
+    try:
+        if not settings.access_to_web_enabled:
+            raise EngineError("access -> web syncing is turned off.")
+        if not settings.access_db_path:
+            raise EngineError("No Access DB configured (Connections screen).")
+
+        from agent.access_db import PyodbcAccessDatabase
+
+        db = PyodbcAccessDatabase(settings.access_db_path, settings.access_db_password)
+        pg_conn = None
+        try:
+            pg_conn = _pg_connect_retry(settings)
+            pg_conn.autocommit = False  # inbound writes are transactional per table
+            mappings = TableMapping.objects.filter(direction="access2web", is_active=True)
+            if not mappings:
+                detail_lines.append("No active access->web table mappings.")
+            table_errors: list[str] = []
+            for tm in mappings:
+                try:
+                    incoming, crm_key, crm_cols = _access_rows_for(db, tm)
+                    if not crm_key or not crm_cols:
+                        detail_lines.append(f"{tm.access_table}: no active key/fields, skipped")
+                        continue
+                    target = tm.pg_table or tm.access_table
+                    # Never push a row without a key.
+                    incoming = [r for r in incoming if str(r.get(crm_key) or "").strip() != ""]
+                    existing = _pg_read_rows(pg_conn, target, crm_cols)
+                    diff = compute_diff(target, crm_key, existing, incoming)
+                    tables_processed += 1
+                    detail_lines.append(f"{tm.access_table} -> {target}: {diff.summary()}")
+                    logger.info("inbound diff %s", diff.summary())
+
+                    if dry or not diff.has_changes:
+                        pg_conn.rollback()
+                        continue
+
+                    rows = [c.new_row for c in diff.inserts] + [c.new_row for c in diff.updates]
+                    written = _pg_upsert_rows(pg_conn, target, crm_key, rows)
+                    pg_conn.commit()
+                    rows_written += written
+                    detail_lines.append(f"{target}: wrote {written} row(s)")
+                    logger.info("inbound wrote %d row(s) to %s", written, target)
+                except Exception as texc:
+                    try:
+                        pg_conn.rollback()
+                    except Exception:
+                        pass
+                    msg = f"{tm.access_table}: FAILED - {type(texc).__name__}: {texc}"
+                    table_errors.append(msg)
+                    detail_lines.append(msg)
+                    logger.exception("inbound table %s failed", tm.access_table)
+                    import psycopg2
+                    if isinstance(texc, (psycopg2.OperationalError, psycopg2.InterfaceError)):
+                        try:
+                            pg_conn.close()
+                        except Exception:
+                            pass
+                        try:
+                            pg_conn = _pg_connect_retry(settings)
+                            pg_conn.autocommit = False
+                            detail_lines.append("reconnected to PostgreSQL")
+                        except Exception as rexc:
+                            detail_lines.append(f"PostgreSQL unreachable - aborting remaining tables: {rexc}")
+                            break
+        finally:
+            if pg_conn is not None:
+                try:
+                    pg_conn.close()
+                except Exception:
+                    pass
+            db.close()
+
+        run.rows_written = rows_written
+        run.tables_processed = tables_processed
+        run.detail = "\n".join(detail_lines)
+        if table_errors:
+            run.status = "error"
+            run.error_message = (
+                f"{len(table_errors)} of {len(mappings)} table(s) failed; "
+                f"{tables_processed} synced. See detail."
+            )
+            run.traceback = "\n".join(table_errors)
+            mailer.send_alert(
+                settings,
+                "OmSree Sync Agent - access->web completed with errors",
+                f"{run.error_message}\n\n" + "\n".join(detail_lines),
+            )
+        else:
+            run.status = "dry-run" if dry else "ok"
+    except Exception as exc:
+        tb = _traceback.format_exc()
+        run.status = "error"
+        run.error_message = f"{type(exc).__name__}: {exc}"
+        run.traceback = tb
+        run.detail = "\n".join(detail_lines)
+        logger.exception("access->web sync failed: %s", exc)
+        mailer.send_alert(
+            settings,
+            "OmSree Sync Agent - access->web FAILED",
+            f"access->web sync failed at {timezone.now()}:\n\n{run.error_message}\n\n"
+            + "Progress:\n" + "\n".join(detail_lines[-30:]) + "\n\nTraceback:\n" + tb,
+        )
+    finally:
+        run.finished_at = timezone.now()
+        run.duration_ms = int((time.monotonic() - t0) * 1000)
+        run.save()
+
+    return run
+
+
 def run_scheduled() -> None:
     """Entry point the APScheduler job calls."""
     settings = AgentSettings.get_solo()
     if settings.web_to_access_enabled:
         run_web_to_access(trigger="scheduled")
-    # access -> web (inbound) intentionally not wired yet (Phase G).
+    if settings.access_to_web_enabled:
+        run_access_to_web(trigger="scheduled")

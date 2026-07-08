@@ -35,13 +35,18 @@ def dashboard(request):
 @require_POST
 def sync_now(request):
     dry = request.POST.get("dry_run") == "1"
+    direction = request.POST.get("direction", "web2access")
+    if direction == "access2web":
+        target, label = engine.run_access_to_web, "Access -> web"
+    else:
+        target, label = engine.run_web_to_access, "Web -> Access"
     # Run off the request thread so the page returns immediately.
     threading.Thread(
-        target=engine.run_web_to_access,
+        target=target,
         kwargs={"trigger": "manual", "dry_run": dry},
         daemon=True,
     ).start()
-    messages.success(request, f"Sync started ({'dry-run' if dry else 'live'}). Check Logs for the result.")
+    messages.success(request, f"{label} sync started ({'dry-run' if dry else 'live'}). Check Logs for the result.")
     return redirect("dashboard")
 
 
