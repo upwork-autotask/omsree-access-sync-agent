@@ -325,8 +325,11 @@ def _build_upsert_sql(target: str, key: str, cols: list[str]) -> str:
     collist = ", ".join(f'"{c}"' for c in cols)
     placeholders = ", ".join(["%s"] * len(cols))
     updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in cols if c != key)
-    return (f"INSERT INTO {qualified} ({collist}) VALUES ({placeholders}) "
-            f'ON CONFLICT ("{key}") DO UPDATE SET {updates}')
+    # With only the key mapped there is nothing to update, so DO NOTHING (an empty
+    # "DO UPDATE SET" is a syntax error).
+    conflict = (f'ON CONFLICT ("{key}") DO UPDATE SET {updates}' if updates
+                else f'ON CONFLICT ("{key}") DO NOTHING')
+    return f"INSERT INTO {qualified} ({collist}) VALUES ({placeholders}) {conflict}"
 
 
 def _pg_upsert_rows(conn, target: str, key: str, rows: list[dict]) -> int:

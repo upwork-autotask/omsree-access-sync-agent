@@ -33,3 +33,11 @@ def test_upsert_sql_schema_qualified(build_upsert_sql):
     sql = build_upsert_sql("sync.unit", "unit_id", ["unit_id", "status"])
     assert 'INSERT INTO "sync"."unit"' in sql
     assert 'ON CONFLICT ("unit_id")' in sql
+
+
+def test_upsert_sql_key_only_uses_do_nothing(build_upsert_sql):
+    # only the key column mapped -> nothing to update -> must be DO NOTHING,
+    # never an empty "DO UPDATE SET" (which is a SQL syntax error)
+    sql = build_upsert_sql("tbl_Block", "id", ["id"])
+    assert 'ON CONFLICT ("id") DO NOTHING' in sql
+    assert "DO UPDATE SET" not in sql
