@@ -361,8 +361,13 @@ def run_access_to_web(trigger: str = "manual", dry_run: bool | None = None) -> S
     tables_processed = 0
 
     try:
-        if not settings.access_to_web_enabled:
-            raise EngineError("access -> web syncing is turned off.")
+        # A dry-run writes nothing, so previewing inbound is always allowed. Only a
+        # LIVE inbound run requires the access->web direction to be toggled on.
+        if not dry and not settings.access_to_web_enabled:
+            raise EngineError(
+                "access -> web live writes are turned off. Toggle the direction ON to "
+                "write (a dry-run is always allowed for previewing)."
+            )
         if not settings.access_db_path:
             raise EngineError("No Access DB configured (Connections screen).")
 
@@ -372,7 +377,10 @@ def run_access_to_web(trigger: str = "manual", dry_run: bool | None = None) -> S
         pg_conn = None
         try:
             pg_conn = _pg_connect_retry(settings)
-            pg_conn.autocommit = False  # inbound writes are transactional per table
+            # Only a live run needs to write; a dry-run stays read-only (autocommit)
+            # so it can't accidentally change the CRM even if the toggle is off.
+            if not dry:
+                pg_conn.autocommit = False  # inbound writes are transactional per table
             mappings = TableMapping.objects.filter(direction="access2web", is_active=True)
             if not mappings:
                 detail_lines.append("No active access->web table mappings.")
