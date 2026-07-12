@@ -315,42 +315,54 @@ def _pg_read_rows(conn, table: str, cols: list[str]):
     return [dict(zip(names, row)) for row in cur.fetchall()]
 
 
-def _build_upsert_sql(target: str, key: str, cols: list[str]) -> str:
-    """Parameterised INSERT ... ON CONFLICT (key) DO UPDATE for one CRM row."""
+def _build_update_sql(target: str, key: str, cols: list[str]) -> str:
+    """UPDATE <target> SET <mapped non-key cols> WHERE <key> = %s.
+
+    Inbound is UPDATE-only: we change agreed columns on EXISTING CRM rows and never
+    insert. (The CRM's Django tables have many NOT NULL columns -- incl. KYC -- that
+    Access does not carry, and Postgres validates them on the proposed INSERT row even
+    with ON CONFLICT, so a partial-column upsert fails. A plain UPDATE touches only the
+    mapped columns, leaving everything else -- including KYC -- intact.)
+    """
     if "." in target:
         schema, name = target.split(".", 1)
         qualified = f'"{schema}"."{name}"'
     else:
         qualified = f'"{target}"'
-    collist = ", ".join(f'"{c}"' for c in cols)
-    placeholders = ", ".join(["%s"] * len(cols))
-    updates = ", ".join(f'"{c}" = EXCLUDED."{c}"' for c in cols if c != key)
-    # With only the key mapped there is nothing to update, so DO NOTHING (an empty
-    # "DO UPDATE SET" is a syntax error).
-    conflict = (f'ON CONFLICT ("{key}") DO UPDATE SET {updates}' if updates
-                else f'ON CONFLICT ("{key}") DO NOTHING')
-    return f"INSERT INTO {qualified} ({collist}) VALUES ({placeholders}) {conflict}"
+    set_cols = [c for c in cols if c != key]
+    set_clause = ", ".join(f'"{c}" = %s' for c in set_cols)
+    return f'UPDATE {qualified} SET {set_clause} WHERE "{key}" = %s'
 
 
-def _pg_upsert_rows(conn, target: str, key: str, rows: list[dict]) -> int:
-    """Upsert rows into a CRM table. Caller manages the transaction (commit)."""
-    written = 0
+def _pg_update_rows(conn, target: str, key: str, rows: list[dict]) -> int:
+    """UPDATE each existing CRM row (mapped non-key cols only). Returns rows affected.
+
+    Caller manages the transaction. Rows whose key isn't present in the CRM affect 0
+    rows (they are reported as skipped by the caller, not inserted).
+    """
+    affected = 0
     cur = conn.cursor()
     for row in rows:
         cols = list(row.keys())
-        cur.execute(_build_upsert_sql(target, key, cols), [row[c] for c in cols])
-        written += 1
-    return written
+        set_cols = [c for c in cols if c != key]
+        if not set_cols:
+            continue  # only the key mapped -> nothing to update
+        sql = _build_update_sql(target, key, cols)
+        params = [row[c] for c in set_cols] + [row[key]]
+        cur.execute(sql, params)
+        affected += cur.rowcount
+    return affected
 
 
 def run_access_to_web(trigger: str = "manual", dry_run: bool | None = None) -> SyncRun:
     """Push agreed Access changes back to the CRM (access -> web).
 
     Mirrors run_web_to_access with the direction reversed: Access is the source,
-    the CRM table is the target, and Access wins. Writes are transactional per
-    table. Requires WRITE access to the CRM target (base table or an updatable
-    view); until that is granted the live path will simply error per table, which
-    is caught and reported. Defaults to whatever settings.dry_run says.
+    the CRM table is the target, and Access wins. UPDATE-only: agreed columns on
+    existing CRM rows are updated; new Access rows are skipped (a CRM insert needs
+    required/KYC fields Access doesn't carry). Writes are transactional per table.
+    Requires UPDATE access on the CRM base table; until granted the live path errors
+    per table, which is caught and reported. Defaults to whatever settings.dry_run says.
     """
     settings = AgentSettings.get_solo()
     dry = settings.dry_run if dry_run is None else dry_run
@@ -407,12 +419,20 @@ def run_access_to_web(trigger: str = "manual", dry_run: bool | None = None) -> S
                         pg_conn.rollback()
                         continue
 
-                    rows = [c.new_row for c in diff.inserts] + [c.new_row for c in diff.updates]
-                    written = _pg_upsert_rows(pg_conn, target, crm_key, rows)
+                    # Inbound is UPDATE-only: change agreed columns on existing CRM
+                    # rows. New Access rows (diff.inserts) are skipped, not inserted --
+                    # creating a CRM record needs required/KYC fields Access lacks.
+                    updated = _pg_update_rows(pg_conn, target, crm_key,
+                                              [c.new_row for c in diff.updates])
                     pg_conn.commit()
-                    rows_written += written
-                    detail_lines.append(f"{target}: wrote {written} row(s)")
-                    logger.info("inbound wrote %d row(s) to %s", written, target)
+                    rows_written += updated
+                    skipped_new = len(diff.inserts)
+                    note = f"{target}: updated {updated} existing row(s)"
+                    if skipped_new:
+                        note += f"; skipped {skipped_new} new row(s) (inbound is update-only)"
+                    detail_lines.append(note)
+                    logger.info("inbound updated %d row(s) in %s (skipped %d new)",
+                                updated, target, skipped_new)
                 except Exception as texc:
                     try:
                         pg_conn.rollback()

@@ -1,4 +1,4 @@
-"""Tests for the access->web (inbound) SQL builder. Django-gated like the const test."""
+"""Tests for the access->web (inbound) UPDATE-only SQL builder. Django-gated."""
 
 import os
 import sys
@@ -12,32 +12,25 @@ django = pytest.importorskip("django")
 
 
 @pytest.fixture(scope="module")
-def build_upsert_sql():
+def build_update_sql():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "controlpanel.settings")
     django.setup()
-    from syncadmin.services.engine import _build_upsert_sql
-    return _build_upsert_sql
+    from syncadmin.services.engine import _build_update_sql
+    return _build_update_sql
 
 
-def test_upsert_sql_public_table(build_upsert_sql):
-    sql = build_upsert_sql("tbl_Customer", "customer_id", ["customer_id", "customer_name_1st"])
-    assert 'INSERT INTO "tbl_Customer"' in sql
-    assert "(%s, %s)" in sql
-    assert 'ON CONFLICT ("customer_id") DO UPDATE SET' in sql
-    # the key is not in the SET clause; the non-key column is
-    assert '"customer_name_1st" = EXCLUDED."customer_name_1st"' in sql
-    assert '"customer_id" = EXCLUDED' not in sql
+def test_update_sql_sets_only_non_key_columns(build_update_sql):
+    sql = build_update_sql("tbl_Customer", "customer_id",
+                           ["customer_id", "customer_name_1st", "primary_contact_no"])
+    assert sql.startswith('UPDATE "tbl_Customer" SET ')
+    assert '"customer_name_1st" = %s' in sql
+    assert '"primary_contact_no" = %s' in sql
+    assert 'WHERE "customer_id" = %s' in sql
+    # the key must never appear in the SET clause
+    assert '"customer_id" = %s,' not in sql
+    assert 'SET "customer_id"' not in sql
 
 
-def test_upsert_sql_schema_qualified(build_upsert_sql):
-    sql = build_upsert_sql("sync.unit", "unit_id", ["unit_id", "status"])
-    assert 'INSERT INTO "sync"."unit"' in sql
-    assert 'ON CONFLICT ("unit_id")' in sql
-
-
-def test_upsert_sql_key_only_uses_do_nothing(build_upsert_sql):
-    # only the key column mapped -> nothing to update -> must be DO NOTHING,
-    # never an empty "DO UPDATE SET" (which is a SQL syntax error)
-    sql = build_upsert_sql("tbl_Block", "id", ["id"])
-    assert 'ON CONFLICT ("id") DO NOTHING' in sql
-    assert "DO UPDATE SET" not in sql
+def test_update_sql_schema_qualified(build_update_sql):
+    sql = build_update_sql("sync.unit", "unit_id", ["unit_id", "status"])
+    assert sql == 'UPDATE "sync"."unit" SET "status" = %s WHERE "unit_id" = %s'
