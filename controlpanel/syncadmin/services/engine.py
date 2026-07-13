@@ -307,14 +307,23 @@ def _access_rows_for(db, tm: TableMapping):
     out = []
     for r in rows:
         row = {}
+        skip = False
         for c, v in r.items():
             if c not in access_to_crm:
                 continue
             cf = access_to_crm[c]
-            if cf in vmaps and v is not None:
-                v = vmaps[cf].get(str(v), v)  # keys compared as strings
+            if cf in vmaps:
+                # value_map is a strict whitelist: only listed source values sync;
+                # anything else (incl. NULL) leaves the target untouched -- so e.g.
+                # only a CANCELLED status flows, never web-owned booked/hold.
+                if v is not None and str(v) in vmaps[cf]:
+                    v = vmaps[cf][str(v)]
+                else:
+                    skip = True
+                    break
             row[cf] = v
-        out.append(row)
+        if not skip:
+            out.append(row)
     crm_key = access_to_crm.get(tm.key_column)
     crm_cols = list(access_to_crm.values())
     return out, crm_key, crm_cols
