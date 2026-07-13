@@ -10,6 +10,7 @@ Runs are recorded as SyncRun rows; failures raise (the caller logs + emails).
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 import traceback as _traceback
@@ -293,9 +294,27 @@ def _access_rows_for(db, tm: TableMapping):
     if not fields:
         return [], None, []
     access_to_crm = {f.access_column: f.crm_field for f in fields}
+    # Optional per-field value translation (e.g. Access status id -> web status text).
+    vmaps: dict[str, dict] = {}
+    for f in fields:
+        if f.value_map:
+            try:
+                vmaps[f.crm_field] = json.loads(f.value_map)
+            except (ValueError, TypeError):
+                logger.warning("bad value_map JSON on %s.%s", tm.access_table, f.access_column)
     access_cols = list(access_to_crm.keys())
     rows = db.read_rows(tm.access_table, access_cols)
-    out = [{access_to_crm[c]: v for c, v in r.items() if c in access_to_crm} for r in rows]
+    out = []
+    for r in rows:
+        row = {}
+        for c, v in r.items():
+            if c not in access_to_crm:
+                continue
+            cf = access_to_crm[c]
+            if cf in vmaps and v is not None:
+                v = vmaps[cf].get(str(v), v)  # keys compared as strings
+            row[cf] = v
+        out.append(row)
     crm_key = access_to_crm.get(tm.key_column)
     crm_cols = list(access_to_crm.values())
     return out, crm_key, crm_cols

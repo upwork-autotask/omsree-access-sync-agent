@@ -131,6 +131,9 @@ class FieldMapping(models.Model):
     role = models.CharField(max_length=12, choices=ROLES, default="sync")
     is_active = models.BooleanField(default=True)
     notes = models.CharField(max_length=500, blank=True)
+    # Optional JSON {source_value: target_value} applied to this field's values when
+    # syncing (e.g. access->web status id -> web status text). Keys compared as str.
+    value_map = models.TextField(blank=True)
 
     class Meta:
         ordering = ["id"]
