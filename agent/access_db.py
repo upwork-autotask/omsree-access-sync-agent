@@ -35,6 +35,24 @@ class AccessDatabase(ABC):
     def upsert_rows(self, table: str, key: str, rows: Sequence[dict[str, Any]]) -> int:
         """Insert or update rows by key. Returns the number of rows written."""
 
+    def update_rows(self, table: str, key: str, rows: Sequence[dict[str, Any]]) -> int:
+        """UPDATE existing rows by key; NEVER insert. Returns rows actually changed.
+
+        Used by natural-key outbound: the key (e.g. Access ``id``) is discovered by
+        matching, so a missing key means 'no such row' -- inserting would duplicate.
+        """
+        raise NotImplementedError
+
+    def update_rows_where(self, table: str, where_cols: Sequence[str],
+                          rows: Sequence[dict[str, Any]]) -> int:
+        """UPDATE by a COMPOSITE key (all where_cols must match); never insert.
+
+        Each row carries both the where_cols (the match key) and the columns to SET.
+        Used when a table has no single unique id -- e.g. tbl_PropertyDefaults, whose
+        ``id`` is not unique, so units are matched by Project+Block+Flat_No instead.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -55,11 +73,12 @@ class AccessDatabase(ABC):
     def row_count(self, table: str) -> int:
         raise NotImplementedError
 
-    def reseed_autonumber(self, table: str, key: str) -> int | None:
+    def reseed_autonumber(self, table: str, key: str, floor: int = 0) -> int | None:
         """After inserting explicit IDs into an AutoNumber key, bump the table's
-        AutoNumber seed to MAX(key)+1 so a future Access-side insert can't reuse an
-        ID that already belongs to a web record. No-op if the key isn't AutoNumber.
-        Returns the new seed, or None if nothing was done."""
+        AutoNumber seed to max(MAX(key)+1, floor) so a future Access-side insert can't
+        reuse an ID that belongs to a web record. `floor` keeps office ids permanently
+        above the web id range. No-op if the key isn't AutoNumber. Returns the new seed
+        (or None)."""
         return None
 
     def close(self) -> None:  # pragma: no cover - trivial default
@@ -108,6 +127,31 @@ class InMemoryAccessDatabase(AccessDatabase):
                 by_key[kv] = new_row
             written += 1
         return written
+
+    def update_rows(self, table: str, key: str, rows: Sequence[dict[str, Any]]) -> int:
+        existing = self.tables.setdefault(table, [])
+        by_key = {r.get(key): r for r in existing}
+        updated = 0
+        for incoming in rows:
+            target = by_key.get(incoming.get(key))
+            if target is None:
+                continue  # no matching row -> never insert
+            target.update(incoming)
+            updated += 1
+        return updated
+
+    def update_rows_where(self, table: str, where_cols: Sequence[str],
+                          rows: Sequence[dict[str, Any]]) -> int:
+        existing = self.tables.setdefault(table, [])
+        updated = 0
+        for incoming in rows:
+            set_cols = [c for c in incoming if c not in where_cols]
+            for target in existing:
+                if all(target.get(k) == incoming.get(k) for k in where_cols):
+                    for c in set_cols:
+                        target[c] = incoming[c]
+                    updated += 1
+        return updated
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -200,7 +244,7 @@ class PyodbcAccessDatabase(AccessDatabase):
             return False
         return False
 
-    def reseed_autonumber(self, table: str, key: str) -> int | None:
+    def reseed_autonumber(self, table: str, key: str, floor: int = 0) -> int | None:
         if not self.is_autonumber(table, key):
             return None
         cur = self._conn.cursor()
@@ -209,7 +253,11 @@ class PyodbcAccessDatabase(AccessDatabase):
             f"SELECT MAX({self._quote(key)}) FROM {self._quote(table)}"
         ).fetchone()
         current_max = row[0] if row and row[0] is not None else 0
-        seed = int(current_max) + 1
+        # The next Access-side (office) id. `floor` forces it above the web id range so
+        # office AutoNumber ids and web-seeded ids never overlap -- and because we take
+        # max() with the floor, a later web insert (whose max is a small web id) can
+        # never pull the seed back down into the web range.
+        seed = max(int(current_max) + 1, int(floor))
         # Access cannot run DDL inside an open transaction. Close any pending
         # transaction, switch to autocommit for the ALTER, then restore.
         try:
@@ -274,6 +322,50 @@ class PyodbcAccessDatabase(AccessDatabase):
                 raise AccessError(f"write failed on {table} {key}={row.get(key)}: {exc}") from exc
             written += 1
         return written
+
+    def update_rows(self, table: str, key: str, rows: Sequence[dict[str, Any]]) -> int:
+        """UPDATE-only by key; a key with no matching row updates nothing (no insert)."""
+        updated = 0
+        cur = self._conn.cursor()
+        for row in rows:
+            non_key = [c for c in row.keys() if c != key]
+            if not non_key:
+                continue
+            sql = (
+                f"UPDATE {self._quote(table)} SET "
+                + ", ".join(f"{self._quote(c)} = ?" for c in non_key)
+                + f" WHERE {self._quote(key)} = ?"
+            )
+            try:
+                cur.execute(sql, [row[c] for c in non_key] + [row[key]])
+            except Exception as exc:  # pragma: no cover - needs a real DB
+                raise AccessError(f"update failed on {table} {key}={row.get(key)}: {exc}") from exc
+            updated += cur.rowcount
+        return updated
+
+    def update_rows_where(self, table: str, where_cols: Sequence[str],
+                          rows: Sequence[dict[str, Any]]) -> int:
+        """UPDATE-only by a composite key (all where_cols ANDed); never inserts."""
+        updated = 0
+        cur = self._conn.cursor()
+        where_cols = list(where_cols)
+        for row in rows:
+            set_cols = [c for c in row.keys() if c not in where_cols]
+            if not set_cols:
+                continue
+            sql = (
+                f"UPDATE {self._quote(table)} SET "
+                + ", ".join(f"{self._quote(c)} = ?" for c in set_cols)
+                + " WHERE "
+                + " AND ".join(f"{self._quote(c)} = ?" for c in where_cols)
+            )
+            params = [row[c] for c in set_cols] + [row[c] for c in where_cols]
+            try:
+                cur.execute(sql, params)
+            except Exception as exc:  # pragma: no cover - needs a real DB
+                raise AccessError(f"update failed on {table} where={ {c: row.get(c) for c in where_cols} }: {exc}") from exc
+            updated += cur.rowcount
+        return updated
 
     @contextmanager
     def transaction(self) -> Iterator[None]:

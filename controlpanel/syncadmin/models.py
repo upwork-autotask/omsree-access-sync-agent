@@ -123,6 +123,7 @@ class FieldMapping(models.Model):
         ("no", "no (never leaves source)"),
         ("review", "review (pending sign-off)"),
         ("candidate", "candidate (inbound)"),
+        ("match", "match (natural-key resolution)"),
     ]
     table = models.ForeignKey(TableMapping, related_name="fields", on_delete=models.CASCADE)
     access_column = models.CharField(max_length=255)
