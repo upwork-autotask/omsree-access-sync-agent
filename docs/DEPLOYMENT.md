@@ -79,6 +79,14 @@ the dev machine). Click **Test** for both Access and PostgreSQL — both must pa
 
 ## 5. Auto-start as a Windows service
 
+**One-click (recommended):** after step 2 (deps installed), just **double-click
+`install-service.bat`** in the `omsree-access-sync-agent` folder. It auto-detects the
+folder and the correct Python (the one that has the dependencies), registers + starts the
+`OmSreeSyncAgent` task, and prints the status + control-panel URL. If it fails on
+permissions, right-click → **Run as administrator**. (Skip the manual block below.)
+
+<details><summary>Manual equivalent (if you prefer)</summary>
+
 Register a Scheduled Task that runs the waitress launcher (`serve.py`), auto-starts on
 logon, and restarts on crash. Run in PowerShell (adjust the two paths):
 
@@ -106,6 +114,8 @@ Open http://127.0.0.1:8787 — log in with the admin account.
 To run **before** any user logs in (true boot-time), re-register with
 `-LogonType Password` and a stored Windows password (`New-ScheduledTaskPrincipal
 -LogonType Password`). Otherwise it starts at logon.
+
+</details>
 
 ---
 
