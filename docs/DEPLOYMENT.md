@@ -15,7 +15,10 @@ mapping (incl. the access→web value-maps) — lives in `controlpanel/instance/
 
 ## 0. Prerequisites on the client machine
 
-1. **Python 3.13 (64-bit)** — https://www.python.org/downloads/ (tick "Add to PATH").
+1. **Python 3.13 or 3.14 (64-bit)** — https://www.python.org/downloads/ (tick "Add to
+   PATH"). Both are validated (3.13 with Django 6.0.7, and 3.14.6). Django 6.0 (pinned in
+   `requirements.txt`) needs Python **3.12+**, so do not use 3.10/3.11. If a machine has
+   multiple Pythons, target the right one explicitly with `py -3.14` / `py -3.13`.
 2. **Microsoft Access Database Engine 2016 redistributable (64-bit)** — required so
    `pyodbc` has the `Microsoft Access Driver (*.mdb, *.accdb)`. Must match Python's
    bitness (64-bit). https://www.microsoft.com/download/details.aspx?id=54920

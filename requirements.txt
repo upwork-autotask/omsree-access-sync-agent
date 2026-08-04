@@ -3,7 +3,9 @@ python-dotenv>=1.0
 pyodbc>=5.1 ; platform_system == "Windows"
 
 # control panel (Django web admin)
-Django>=5.0
+# Django 6.0 supports Python 3.12-3.14; validated on 3.13 (Django 6.0.7) and 3.14.6.
+# Pinned to the 6.0.x line so a fresh client install can't pull an untested major.
+Django>=6.0,<6.1
 psycopg2-binary>=2.9
 APScheduler>=3.10
 cryptography>=42.0
