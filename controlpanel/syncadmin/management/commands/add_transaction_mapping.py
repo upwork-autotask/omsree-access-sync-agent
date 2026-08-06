@@ -1,12 +1,13 @@
-﻿import json
-from django.core.management.base import BaseCommand
+﻿from django.core.management.base import BaseCommand
 from agent.access_db import open_access_db
 from syncadmin.models import AgentSettings, TableMapping, FieldMapping
 
 ACCESS_TABLE = "tbl_Main_Transaction"
 PG_VIEW = "tbl_Main_Transaction"
 KEY_COL = "TRANSACTION_WEB_ID"
-MODE_MAP = json.dumps({"1": 9, "2": 2, "3": 4, "4": 5})
+# The web view aligns its lookup ids to the Access lookup tables (mode/type/source/bank),
+# so all four sync directly -- no value_map. (Razorpay mode=11 must exist in Access
+# tbl_Transaction_Mode.)
 FIELDS = [
     (KEY_COL, "id", "key", ""),
     ("PROPERTY_DETAILS_ID", "fk:property_details_id@tbl_Property_Details.WEB_SOURCE_ID", "sync", ""),
@@ -14,7 +15,10 @@ FIELDS = [
     ("AMOUNT", "amount", "sync", ""),
     ("TOTAL", "total", "sync", ""),
     ("ISACTIVE", "isactive", "sync", ""),
-    ("TRANSACTION_MODE_ID", "transaction_mode_id", "sync", MODE_MAP),
+    ("TRANSACTION_MODE_ID", "transaction_mode_id", "sync", ""),
+    ("TRANSACTION_TYPE_ID", "transaction_type_id", "sync", ""),
+    ("TRANSACTION_SOURCE_ID", "transaction_source_id", "sync", ""),
+    ("BANK_ID", "bank_id", "sync", ""),
     ("TRANSACTION_NO", "transaction_no", "sync", ""),
     ("REMARKS", "remarks", "sync", ""),
     ("ROUTED_TRANSACTION", "const:false", "sync", ""),
