@@ -19,6 +19,8 @@ FIELDS = [
     ("TRANSACTION_TYPE_ID", "transaction_type_id", "sync", ""),
     ("TRANSACTION_SOURCE_ID", "transaction_source_id", "sync", ""),
     ("BANK_ID", "bank_id", "sync", ""),
+    ("PAYMENT_TYPE_ID", "payment_type_id", "sync", ""),
+    ("RECORD_TYPE_ID", "record_type_id", "sync", ""),
     ("TRANSACTION_NO", "transaction_no", "sync", ""),
     ("REMARKS", "remarks", "sync", ""),
     ("ROUTED_TRANSACTION", "const:false", "sync", ""),
