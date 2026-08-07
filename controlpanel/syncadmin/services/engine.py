@@ -320,9 +320,10 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
                         if dry or not writes:
                             continue
                         if not backed_up:
-                            path = db.backup()
-                            if path:
-                                detail_lines.append(f"backup: {path}")
+                            path = db.backup(min_interval_minutes=settings.backup_min_interval_minutes,
+                                             keep=settings.backup_keep)
+                            detail_lines.append(f"backup: {path}" if path
+                                                else "backup: skipped (recent backup within interval)")
                             backed_up = True
                         with db.transaction():
                             written = db.update_rows_where(tm.access_table, where_cols, writes)
@@ -364,9 +365,10 @@ def run_web_to_access(trigger: str = "manual", dry_run: bool | None = None) -> S
                         continue
 
                     if not backed_up:
-                        path = db.backup()
-                        if path:
-                            detail_lines.append(f"backup: {path}")
+                        path = db.backup(min_interval_minutes=settings.backup_min_interval_minutes,
+                                         keep=settings.backup_keep)
+                        detail_lines.append(f"backup: {path}" if path
+                                            else "backup: skipped (recent backup within interval)")
                         backed_up = True
 
                     rows = [c.new_row for c in diff.inserts] + [c.new_row for c in diff.updates]

@@ -12,12 +12,58 @@ key; the agent never deletes rows (docs/implementation-plan.md s.4).
 
 from __future__ import annotations
 
+import re
 import shutil
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Sequence
+
+_BACKUP_STAMP_RE = re.compile(r"\.backup-(\d{8}-\d{6})")
+
+
+def _list_backups(db_path: Path) -> list[Path]:
+    """Existing backups for db_path, oldest-first (the name carries a fixed-width UTC stamp)."""
+    db_path = Path(db_path)
+    return sorted(db_path.parent.glob(f"{db_path.stem}.backup-*{db_path.suffix}"))
+
+
+def _prune_backups(db_path: Path, keep: int) -> int:
+    """Delete all but the newest `keep` backups. keep<=0 keeps everything. Returns #removed."""
+    if not keep or keep <= 0:
+        return 0
+    files = _list_backups(db_path)
+    removed = 0
+    for old in (files[:-keep] if len(files) > keep else []):
+        try:
+            old.unlink()
+            removed += 1
+        except Exception:  # pragma: no cover - filesystem dependent
+            pass
+    return removed
+
+
+def perform_backup(db_path: Path, min_interval_minutes: int = 0, keep: int = 0) -> Path | None:
+    """Timestamped copy of db_path, honouring a minimum interval and retention.
+
+    Returns the new backup path, or None if skipped because a backup already exists
+    within the last `min_interval_minutes` (so a frequent sync doesn't back up every run).
+    After copying, prunes to the newest `keep` backups (keep<=0 = unlimited).
+    """
+    db_path = Path(db_path)
+    existing = _list_backups(db_path)
+    if min_interval_minutes and existing:
+        m = _BACKUP_STAMP_RE.search(existing[-1].name)
+        if m:
+            newest = datetime.strptime(m.group(1), "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+            if (datetime.now(timezone.utc) - newest).total_seconds() < min_interval_minutes * 60:
+                return None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_path = db_path.with_name(f"{db_path.stem}.backup-{stamp}{db_path.suffix}")
+    shutil.copy2(db_path, backup_path)
+    _prune_backups(db_path, keep)
+    return backup_path
 
 
 class AccessError(Exception):
@@ -58,7 +104,7 @@ class AccessDatabase(ABC):
     def transaction(self) -> Iterator[None]:
         """Context manager: commit on success, roll back on exception."""
 
-    def backup(self) -> Path | None:
+    def backup(self, min_interval_minutes: int = 0, keep: int = 0) -> Path | None:
         """Take a safety copy before the first write of a run. Default: no-op."""
         return None
 
@@ -377,14 +423,11 @@ class PyodbcAccessDatabase(AccessDatabase):
         else:
             self._conn.commit()
 
-    def backup(self) -> Path | None:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-        backup_path = self.db_path.with_name(f"{self.db_path.stem}.backup-{stamp}{self.db_path.suffix}")
+    def backup(self, min_interval_minutes: int = 0, keep: int = 0) -> Path | None:
         try:
-            shutil.copy2(self.db_path, backup_path)
+            return perform_backup(self.db_path, min_interval_minutes, keep)
         except Exception as exc:  # pragma: no cover - filesystem dependent
             raise AccessError(f"backup failed: {exc}") from exc
-        return backup_path
 
     def close(self) -> None:  # pragma: no cover - needs a real connection
         try:

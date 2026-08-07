@@ -33,6 +33,12 @@ class AgentSettings(models.Model):
     scheduler_paused = models.BooleanField(default=False)
     state_dir = models.CharField(max_length=500, blank=True)
 
+    # --- Access backup policy (independent of sync cadence) ---
+    backup_keep = models.PositiveIntegerField(
+        default=10, help_text="max backups to keep per Access file (0 = unlimited)")
+    backup_min_interval_minutes = models.PositiveIntegerField(
+        default=0, help_text="minimum minutes between backups (0 = back up every write)")
+
     outbound_cursor = models.CharField(max_length=120, blank=True)
     inbound_cursor = models.CharField(max_length=120, blank=True)
 
