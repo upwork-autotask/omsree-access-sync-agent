@@ -39,6 +39,13 @@ class AgentSettings(models.Model):
     backup_min_interval_minutes = models.PositiveIntegerField(
         default=0, help_text="minimum minutes between backups (0 = back up every write)")
 
+    # --- Health watchdog / alert throttle ---
+    health_stale_minutes = models.PositiveIntegerField(
+        default=90, help_text="alert if no successful sync within this many minutes")
+    alert_throttle_minutes = models.PositiveIntegerField(
+        default=60, help_text="minimum minutes between alert emails (anti-spam; 0 = no throttle)")
+    last_alert_at = models.DateTimeField(null=True, blank=True)
+
     outbound_cursor = models.CharField(max_length=120, blank=True)
     inbound_cursor = models.CharField(max_length=120, blank=True)
 

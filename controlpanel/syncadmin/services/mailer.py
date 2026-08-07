@@ -37,10 +37,25 @@ def send_test(settings) -> tuple[bool, str]:
 
 
 def send_alert(settings, subject: str, body: str) -> None:
-    """Best-effort: alerts must never crash a sync run."""
+    """Best-effort + throttled: alerts must never crash a sync run, and must not spam.
+
+    Skips if an alert was already sent within `alert_throttle_minutes` (anti-spam),
+    so a failure recurring every few minutes emails at most once per window.
+    """
     if not settings.alerts_enabled or not settings.recipient_list:
         return
+    from django.utils import timezone
+    now = timezone.now()
+    throttle = getattr(settings, "alert_throttle_minutes", 0) or 0
+    last = getattr(settings, "last_alert_at", None)
+    if throttle and last and (now - last).total_seconds() < throttle * 60:
+        return  # within the throttle window
     try:
         _send(settings, subject, body)
+        try:
+            settings.last_alert_at = now
+            settings.save(update_fields=["last_alert_at"])
+        except Exception:
+            pass
     except Exception:
         pass
